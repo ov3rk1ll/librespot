@@ -16,10 +16,26 @@ addons:
       - portaudio19-dev
 
 before_script:
-    - mkdir -p ~/.cargo
-    - echo '[target.armv7-unknown-linux-gnueabihf]' > ~/.cargo/config
-    - echo 'linker = "arm-linux-gnueabihf-gcc"' >> ~/.cargo/config
-    - rustup target add armv7-unknown-linux-gnueabihf
+  # get raspberry pi tools (cross compiler etc); use fixed rev, should be updated sometimes
+  # (if we would ignore rpi1 support, we could just use ubuntu's/debian's gcc-arm-linux-gnueabihf; with libc6-armhf-cross, libc6-dev-armhf-cross, etc.)
+  - mkdir pi-tools
+  - curl -L https://github.com/raspberrypi/tools/archive/648a6eeb1e3c2b40af4eb34d88941ee0edeb3e9a.tar.gz | tar xz --strip-components 1 -C pi-tools
+  - export PATH=$PWD/pi-tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin/:$PATH
+  # create wrapper around gcc to point to rpi sysroot
+  - echo -e '#!/bin/bash' > pi-tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin/gcc-sysroot
+  - echo -e "arm-linux-gnueabihf-gcc --sysroot $PWD/pi-tools/arm-bcm2708/arm-bcm2708hardfp-linux-gnueabi/arm-bcm2708hardfp-linux-gnueabi/sysroot \"\$@\"" >> pi-tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin/gcc-sysroot
+  - chmod +x pi-tools/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin/gcc-sysroot
+  # get alsa lib and headers
+  - curl -OL http://mirrordirector.raspbian.org/raspbian/pool/main/a/alsa-lib/libasound2_1.0.25-4_armhf.deb
+  - ar p libasound2_1.0.25-4_armhf.deb data.tar.gz | tar -xz -C pi-tools/arm-bcm2708/arm-bcm2708hardfp-linux-gnueabi/arm-bcm2708hardfp-linux-gnueabi/sysroot
+  - curl -OL http://mirrordirector.raspbian.org/raspbian/pool/main/a/alsa-lib/libasound2-dev_1.0.25-4_armhf.deb
+  - ar p libasound2-dev_1.0.25-4_armhf.deb data.tar.gz | tar -xz -C pi-tools/arm-bcm2708/arm-bcm2708hardfp-linux-gnueabi/arm-bcm2708hardfp-linux-gnueabi/sysroot/
+  # i don't why this is neccessary
+  - ln -s ld-linux.so.3 pi-tools/arm-bcm2708/arm-bcm2708hardfp-linux-gnueabi/arm-bcm2708hardfp-linux-gnueabi/sysroot/lib/ld-linux-armhf.so.3
+  # point cargo to use gcc wrapper as linker
+  - mkdir -p ~/.cargo
+  - echo -e '[target.arm-unknown-linux-gnueabihf]\nlinker = "gcc-sysroot"' > ~/.cargo/config
+  - rustup target add arm-unknown-linux-gnueabihf
 
 script:
     - cargo build --no-default-features
@@ -27,7 +43,21 @@ script:
     - cargo build --no-default-features --features "portaudio-backend"
     - cargo build --no-default-features --features "pulseaudio-backend"
     - cargo build --no-default-features --features "alsa-backend"
-    - cargo build --no-default-features --target armv7-unknown-linux-gnueabihf
+
+    - cargo build --no-default-features --features "alsa-backend" --target arm-unknown-linux-gnueabihf --release
+
+before_deploy:
+  zip -j librespot-linux-armhf-raspberry_pi.zip target/arm-unknown-linux-gnueabihf/release/librespot
+
+deploy:
+  provider: releases
+  api_key:
+    secure: "hB+czotLh+aGLonc+geF/hGelHQQ5AK+IWKGVnSilxzIn2ALFMqrZBKQXVOl0I1BbZTcNErPYZdhLMo+oLXP2zqeDpReMtfYb8c2BA3t/CmRkIkeLgSI1FJyk9lZmYLCDTRj2K5Ij2WHMg53quEJYv/eym/FN63flY5gKPIGodqajFqTfPAhOdAzMXZ1fsuMT5Z0Xqnd7b+gItjey2hGRF6mwWhOypBb3rJpvE+fJtcfFbR1bR/G8Mt5asqtFW8IbHTzVguuDO4IfoLCfoOyAnVHQpq55C3VcIDlZW5mNCUNw74iJzRQk97loB48sAKoJrkE5kaq7WvBbfTvCq5moqj3hSjGjpeAu6fTHkbInxfKTdQD3qZ1C6SQ6b4z02tXV0XxOcaueGcP71CHp31sijDHKd4js8Zfvs5S9+4+OdnD3qnmbeS/fDblxlwM9J//cgqw5vOqBZo4L4ic7I/Fp83DLBzygQVPQDkQUrZ3KJtFwIsqQkJpXQkbdxfZwlW2WAJOHw85GsGlxnYa7b9bA3puuMMojTd3XDIo1GzP4BWsyS7zkGm6mSelu7xhJLglSy4cP9XUlGYdG7mo6TlMA3u6UjL67qEXlpmrHIjChI2L7WiqsS7HnK69SfkL1wM5dCKmECoMFYXgdKRmHz4FLuptlmXMPPpGrZ4B5C7Mxxs="
+  file: "librespot-linux-armhf-raspberry_pi.zip"
+  skip_cleanup: true
+  on:
+    condition: $TRAVIS_RUST_VERSION = stable
+#    tags: true
 
 notifications:
     email: false
